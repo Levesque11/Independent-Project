@@ -1,0 +1,1 @@
+cmd_/home/levesque11/rt-kernel/modules/my_driver/my_driver.ko := ld -r -EL  -maarch64elf -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T scripts/module.lds -o /home/levesque11/rt-kernel/modules/my_driver/my_driver.ko /home/levesque11/rt-kernel/modules/my_driver/my_driver.o /home/levesque11/rt-kernel/modules/my_driver/my_driver.mod.o;  true

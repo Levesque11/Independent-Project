@@ -1,0 +1,1 @@
+cmd_/home/levesque11/rt-kernel/modules/my_driver/my_driver.mod := printf '%s\n'   my_driver.o | awk '!x[$$0]++ { print("/home/levesque11/rt-kernel/modules/my_driver/"$$0) }' > /home/levesque11/rt-kernel/modules/my_driver/my_driver.mod
