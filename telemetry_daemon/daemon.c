@@ -2,15 +2,16 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <signal.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <gpiod.h>
-#include <fcntl.h> 
+#include <unistd.h>     // Gives me read(), close(), and usleep()
+#include <signal.h>     // Ctrl+C an interupt
+#include <string.h>     // memset() and strlen()
+#include <sys/socket.h> // Core Linux networking and sockets
+#include <arpa/inet.h>  // Used to convert string IP addresses into binary network formats
+#include <gpiod.h>      // libgpiod library to control Raspberry Pi hardware pins
+#include <fcntl.h>      // File control options 
 #include <stdint.h>  
 
+// hardware controller on the Pi that handles the standard GPIO pins
 #define CHIP_PATH "/dev/gpiochip4" 
 #define GREEN_LED 17               
 #define RED_LED   22               
@@ -19,53 +20,61 @@
 #define DEST_IP "10.70.14.170"       
 #define DEST_PORT 9050             
 
-// I'm using the volatile keyword here to tell the compiler not to optimize this variable, 
-// because it can change asynchronously at any time if I press Ctrl + C.
+// I'm using the volatile keyword here to tell the compiler this variable can change 
+// because it can change asynchronously at any time if I press Ctrl + C
 static volatile int keep_running = 1;
-
-// My signal handler. Instead of doing dangerous stuff like turning off LEDs directly inside an interrupt, 
-// I just safely flip my flag to 0 so my main while loop knows to stop naturally.
+ 
+// flip my flag to 0 so my main while loop knows to stop naturally and turn off green LED
 void handle_sigint(int sig) {
     keep_running = 0; 
 }
 
 int main() {
     // GPIO POINTERS & STRUCTS 
-    struct gpiod_chip *chip;               
-    struct gpiod_line_settings *settings;  
-    struct gpiod_line_config *line_config; 
-    struct gpiod_line_request *request;    
+    struct gpiod_chip *chip;               // Pointer to the physical GPIO controller
+    struct gpiod_line_settings *settings;  // Rules for how the pins should act
+    struct gpiod_line_config *line_config; // Groups multiple pins together so I can apply settings
+    struct gpiod_line_request *request;    // My active lock on the hardware pins
     
     // NETWORKING VARIABLES 
-    int sock;                              
-    struct sockaddr_in server_addr;        
+    int sock;                              // The file descriptor for my UDP socket
+    struct sockaddr_in server_addr;        // Struct holding the IP and Port of my Unity receiver
     
     signal(SIGINT, handle_sigint);
 
     // GPIO HARDWARE SETUP 
+    // Open the physical GPIO chip on the Pi
     chip = gpiod_chip_open(CHIP_PATH);
     if (!chip) { 
         perror("Failed to open GPIO chip"); 
         return 1;                          
     }
 
+    // Allocate memory for my pin settings
     settings = gpiod_line_settings_new();
+    // Set the pins up to send voltage out
     gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT);
+    // Make sure the LEDs start completely turned off
     gpiod_line_settings_set_output_value(settings, GPIOD_LINE_VALUE_INACTIVE);
 
+    // Allocate memory for the configuration mapping
     line_config = gpiod_line_config_new();
     unsigned int offsets[] = { GREEN_LED, RED_LED };
+    // Apply settings to both the Green and Red LED pins at the same time
     gpiod_line_config_add_line_settings(line_config, offsets, 2, settings);
 
+    // Ask the Linux kernel for exclusive control over these specific pins
     request = gpiod_chip_request_lines(chip, NULL, line_config);
     if (!request) {
         perror("Failed to request GPIO lines");
+        // If it fails, I have to free the structs to prevent memory leaks
         gpiod_line_config_free(line_config);
         gpiod_line_settings_free(settings);
         gpiod_chip_close(chip);
         return 1;
     }
     
+    // safely delete the setup structs from memory
     gpiod_line_config_free(line_config);
     gpiod_line_settings_free(settings);
 
@@ -76,9 +85,13 @@ int main() {
         return 1;
     }
 
+    // Zero out the memory block for the server address struct to clear any garbage data
     memset(&server_addr, 0, sizeof(server_addr));
+    // Set the address family to IPv4
     server_addr.sin_family = AF_INET; 
+    // Convert my port number into network byte order 
     server_addr.sin_port = htons(DEST_PORT); 
+    // Convert my string IP address into binary format
     inet_pton(AF_INET, DEST_IP, &server_addr.sin_addr);
 
     printf("Telemetry daemon running. Broadcasting to %s:%d. Press Ctrl + C to exit safely.\n", DEST_IP, DEST_PORT);
@@ -86,24 +99,29 @@ int main() {
     // MAIN TELEMETRY LOOP
     while (keep_running) {
         int sensor_success = 0; 
-        int fd0, fd1, fd2;
-        char buf0[128], buf1[128], buf2[128];
+        int fd0, fd1, fd2;                    // File descriptors 
+        char buf0[128], buf1[128], buf2[128]; // Buffers to hold the JSON strings
 
-        // 1. Open the three custom Ring 3 files generated by my kernel module
+        // Open the three custom Ring 3 character devices generated by my kernel module
+        // O_RDONLY means I'm only reading data, not trying to write back to the sensor
         fd0 = open("/dev/drone_sensor_0", O_RDONLY);
         fd1 = open("/dev/drone_sensor_1", O_RDONLY);
         fd2 = open("/dev/drone_sensor_2", O_RDONLY);
 
-        // 2. Read the formatted JSON directly from Ring 0 and blast it over UDP
+        // Read the formatted JSON directly from Ring 0 and blast it over UDP
         if (fd0 >= 0 || fd1 >= 0 || fd2 >= 0) {
-            sensor_success = 1; // At least one sensor successfully connected
+            sensor_success = 1; // Flag that at least one sensor successfully connected
             
             if (fd0 >= 0) {
+                // Read up to 127 bytes from the kernel driver into my user-space buffer
                 int b = read(fd0, buf0, sizeof(buf0) - 1);
                 if (b > 0) {
+                    // Manually add the null-terminator
                     buf0[b] = '\0';
+                    // Blast the JSON string over the network to my Unity ground station
                     sendto(sock, buf0, strlen(buf0), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
                 }
+                // Close the file descriptor 
                 close(fd0);
             }
             if (fd1 >= 0) {
@@ -124,34 +142,44 @@ int main() {
             }
         }
 
-        // 3. Update the Hardware LED Status Indicators
+        // Update the Hardware LED Status Indicators
         if (sensor_success) {
+            // Tell the GPIO chip to send voltage to the Green pin 
             gpiod_line_request_set_value(request, GREEN_LED, GPIOD_LINE_VALUE_ACTIVE);
             gpiod_line_request_set_value(request, RED_LED, GPIOD_LINE_VALUE_INACTIVE);
             printf("[STATUS] Sensors OK. UDP packets sent.\n");
         } else {
+            // Flip the LEDs to show a failure state
             gpiod_line_request_set_value(request, GREEN_LED, GPIOD_LINE_VALUE_INACTIVE);
             gpiod_line_request_set_value(request, RED_LED, GPIOD_LINE_VALUE_ACTIVE);
             
+            // Build a dummy JSON payload using snprintf to tell Unity the sensor crashed
             char error_payload[128];
             snprintf(error_payload, sizeof(error_payload), "{\"status\": \"ERROR\", \"accel_x\": 0, \"accel_y\": 0, \"accel_z\": 0}");
+            // Send the error packet over UDP
             sendto(sock, error_payload, strlen(error_payload), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
             
             printf("MPU-6050 read failure! Error packet sent.\n");
         }
 
-        // Sleep execution for 200,000 microseconds (0.2 seconds / 5Hz telemetry rate).
+        // Sleep the thread for 200,000 microseconds 
         usleep(200000); 
     }
 
     // CLEANUP 
     printf("\n[INFO] Exiting... Turning off LEDs, closing sockets, and cleaning up kernel resources.\n");
+    
+    // Close the UDP network socket
     close(sock);
 
+    // Physically turn off the voltage to both LEDs so they don't stay on forever
     gpiod_line_request_set_value(request, GREEN_LED, GPIOD_LINE_VALUE_INACTIVE);
     gpiod_line_request_set_value(request, RED_LED, GPIOD_LINE_VALUE_INACTIVE);
     
+    // Give the hardware a tiny fraction of a second to register the voltage drop
     usleep(20000); 
+    
+    // Give the pins back to the OS and close the connection to the hardware controller
     gpiod_line_request_release(request);
     gpiod_chip_close(chip);
 
