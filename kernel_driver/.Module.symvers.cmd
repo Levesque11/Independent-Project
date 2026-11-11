@@ -1,1 +1,0 @@
-cmd_/home/levesque11/kernel_driver/Module.symvers :=  sed 's/ko$$/o/'  /home/levesque11/kernel_driver/modules.order | scripts/mod/modpost -m -a     -o /home/levesque11/kernel_driver/Module.symvers -n -e -i Module.symvers -T - 

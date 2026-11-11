@@ -1,1 +1,0 @@
-cmd_/home/levesque11/kernel_driver/drone_sensor.mod := printf '%s\n'   drone_sensor.o | awk '!x[$$0]++ { print("/home/levesque11/kernel_driver/"$$0) }' > /home/levesque11/kernel_driver/drone_sensor.mod

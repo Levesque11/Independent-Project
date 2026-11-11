@@ -1,1 +1,0 @@
-cmd_/home/levesque11/kernel_driver/drone_sensor.ko := ld -r -EL  -maarch64elf -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T scripts/module.lds -o /home/levesque11/kernel_driver/drone_sensor.ko /home/levesque11/kernel_driver/drone_sensor.o /home/levesque11/kernel_driver/drone_sensor.mod.o;  true
